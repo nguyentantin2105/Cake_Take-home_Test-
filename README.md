@@ -20,9 +20,9 @@ dags/
 
 The DAG runs every 5 minutes. On each run:
 
-1. **`list_pending_files`** — connects to the source SFTP, lists all files recursively, and excludes paths already recorded in the Airflow Variable manifest.
-2. **`copy_file`** *(dynamically mapped)* — one task instance per new file; streams the file in 8 MB chunks through an optional transform pipeline into the target SFTP. Returns the transferred path via XCom.
-3. **`update_manifest`** — collects all transferred paths from the mapped tasks and writes them to the manifest in a single, race-free operation.
+1. `**list_pending_files**` — connects to the source SFTP, lists all files recursively, and excludes paths already recorded in the Airflow Variable manifest.
+2. `**copy_file**` *(dynamically mapped)* — one task instance per new file; streams the file in 8 MB chunks through an optional transform pipeline into the target SFTP. Returns the transferred path via XCom.
+3. `**update_manifest*`* — collects all transferred paths from the mapped tasks and writes them to the manifest in a single, race-free operation.
 
 ---
 
@@ -37,8 +37,8 @@ The DAG runs every 5 minutes. On each run:
 
 ```bash
 # 1. Clone and enter the project
-git clone <repo-url>
-cd vpb_test
+git clone https://github.com/nguyentantin2105/Cake_Take-home_Test.git
+cd Cake_Take-home_Test
 
 # 2. Create .env from the example and set your host UID
 cp .env.example .env
@@ -135,16 +135,18 @@ docker compose exec airflow-scheduler \
 
 ## Assumptions and design decisions
 
-| Topic | Decision | Rationale |
-|---|---|---|
-| **Sync direction** | Source → target only; deletes on source are not propagated | Requirement: deleted source files must be preserved on target |
-| **Change detection** | File path used as the deduplication key | Simple and predictable; re-running after a manifest reset transfers everything again |
-| **Large files** | Paramiko `prefetch` + 8 MB chunk streaming | Files are never fully loaded into RAM; the chunk size is configurable per call |
-| **Concurrency** | `max_active_tis_per_dagrun=4`, `max_active_runs=1` | Limits SFTP connection pressure; prevents overlapping DAG runs from double-listing |
-| **Manifest update** | A dedicated `update_manifest` task merges all paths in one write | Eliminates the race condition of concurrent tasks each doing load-modify-save independently |
-| **Database** | PostgreSQL instead of SQLite | SQLite does not support concurrent writes required by the Celery result backend |
-| **Transform pipeline** | `TransformPipeline` chains `Transform` objects over the byte stream | Adding gzip/encryption requires a new `Transform` subclass — the DAG and sync logic are unchanged |
-| **Backend abstraction** | `StorageBackend` ABC with `list_files / read_chunks / write_chunks / exists` | Replacing SFTP with S3 requires only a new class; the DAG calls the same interface |
+
+| Topic                   | Decision                                                                     | Rationale                                                                                         |
+| ----------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| **Sync direction**      | Source → target only; deletes on source are not propagated                   | Requirement: deleted source files must be preserved on target                                     |
+| **Change detection**    | File path used as the deduplication key                                      | Simple and predictable; re-running after a manifest reset transfers everything again              |
+| **Large files**         | Paramiko `prefetch` + 8 MB chunk streaming                                   | Files are never fully loaded into RAM; the chunk size is configurable per call                    |
+| **Concurrency**         | `max_active_tis_per_dagrun=4`, `max_active_runs=1`                           | Limits SFTP connection pressure; prevents overlapping DAG runs from double-listing                |
+| **Manifest update**     | A dedicated `update_manifest` task merges all paths in one write             | Eliminates the race condition of concurrent tasks each doing load-modify-save independently       |
+| **Database**            | PostgreSQL instead of SQLite                                                 | SQLite does not support concurrent writes required by the Celery result backend                   |
+| **Transform pipeline**  | `TransformPipeline` chains `Transform` objects over the byte stream          | Adding gzip/encryption requires a new `Transform` subclass — the DAG and sync logic are unchanged |
+| **Backend abstraction** | `StorageBackend` ABC with `list_files / read_chunks / write_chunks / exists` | Replacing SFTP with S3 requires only a new class; the DAG calls the same interface                |
+
 
 ---
 

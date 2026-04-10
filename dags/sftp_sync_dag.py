@@ -191,7 +191,7 @@ def sftp_sync() -> None:
         source_conn_id: str = params["source_conn_id"]
 
         # Filter out None values from failed/skipped upstream tasks.
-        new_paths = [p for p in transferred_paths if p]
+        new_paths = [p for p in (transferred_paths or []) if p]
         if not new_paths:
             log.info("No new paths to record.")
             return
