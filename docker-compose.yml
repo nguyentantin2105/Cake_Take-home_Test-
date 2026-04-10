@@ -1,0 +1,167 @@
+version: '3.8'
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.9.3
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__PLUGINS_FOLDER: /opt/airflow/plugins
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+    PYTHONPATH: /opt/airflow/plugins
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - airflow-logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ./config:/opt/airflow/config
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends-on
+    redis:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  redis:
+    image: redis:7
+    expose:
+      - 6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 30s
+      retries: 50
+      start_period: 30s
+    restart: always
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "18080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-worker:
+    <<: *airflow-common
+    command: celery worker
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    environment:
+      <<: *airflow-common-env
+      DUMB_INIT_SETSID: "0"
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -e
+        pip install --no-cache-dir paramiko apache-airflow-providers-sftp
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com \
+          --password admin || true
+        airflow connections add sftp_source \
+          --conn-type sftp \
+          --conn-host "${SFTP_SOURCE_HOST}" \
+          --conn-login "${SFTP_SOURCE_USER}" \
+          --conn-password "${SFTP_SOURCE_PASSWORD}" \
+          --conn-port "${SFTP_SOURCE_PORT}" \
+          --conn-extra '{"root_path": "${SFTP_SOURCE_ROOT}"}' || true
+        airflow connections add sftp_target \
+          --conn-type sftp \
+          --conn-host "${SFTP_TARGET_HOST}" \
+          --conn-login "${SFTP_TARGET_USER}" \
+          --conn-password "${SFTP_TARGET_PASSWORD}" \
+          --conn-port "${SFTP_TARGET_PORT}" \
+          --conn-extra '{"root_path": "${SFTP_TARGET_ROOT}"}' || true
+        echo "Airflow initialisation complete."
+    environment:
+      <<: *airflow-common-env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  sftp-source:
+    image: atmoz/sftp
+    volumes:
+      - sftp-source-data:/home/user/upload
+    command: "${SFTP_SOURCE_USER}:${SFTP_SOURCE_PASSWORD}:1001:1001:upload"
+    ports:
+      - "2222:22"
+
+  sftp-target:
+    image: atmoz/sftp
+    volumes:
+      - sftp-target-data:/home/user/upload
+    command: "${SFTP_TARGET_USER}:${SFTP_TARGET_PASSWORD}:1001:1001:upload"
+    ports:
+      - "2223:22"
+
+volumes:
+  postgres-db-volume:
+  sftp-source-data:
+  sftp-target-data:
+  airflow-logs:

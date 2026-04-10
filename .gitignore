@@ -1,0 +1,12 @@
+# Environment (machine-specific UID)
+.env
+
+# Airflow runtime
+logs/
+config/
+
+__pycache__/
+*.pyc
+*.pyo
+
+CLAUDE.md
